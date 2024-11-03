@@ -25,7 +25,7 @@ interface Tile {
 }
 
 // Create the map (element with id "map" is defined in index.html)
-const map = leaflet.map(document.getElementById("map")!, {
+const game_map = leaflet.map(document.getElementById("map")!, {
   center: player_loc,
   zoom: GAMEPLAY_ZOOM_LEVEL,
   minZoom: GAMEPLAY_ZOOM_LEVEL,
@@ -42,7 +42,7 @@ leaflet
     attribution:
       '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   })
-  .addTo(map);
+  .addTo(game_map);
 
 // Add a marker to represent the player
 const playerIcon = leaflet.icon({
@@ -51,7 +51,7 @@ const playerIcon = leaflet.icon({
 });
 const playerMarker = leaflet.marker(player_loc, { icon: playerIcon });
 playerMarker.bindTooltip("That's you!");
-playerMarker.addTo(map);
+playerMarker.addTo(game_map);
 
 // Display the player's points
 let playerCoins = 0;
@@ -72,7 +72,7 @@ function spawnCache(tile: Tile) {
   );
   // Add a rectangle to the map to represent the cache
   const cache = leaflet.marker(location, { icon: cacheIcon });
-  cache.addTo(map);
+  cache.addTo(game_map);
 
   // Handle interactions with the cache
   cache.bindPopup(() => {
