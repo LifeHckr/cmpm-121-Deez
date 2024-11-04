@@ -5,17 +5,22 @@ import "./style.css";
 import "./leafletWorkaround.ts";
 import luck from "./luck.ts";
 
+const playerIconURL = import.meta.resolve("../static/tile_0085.png");
+
+const cacheIconURL = import.meta.resolve("../static/tile_0089.png");
+
 const GAMEPLAY_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
 
-const player_loc = leaflet.latLng(36.98949379578401, -122.06277128548504);
+const initLoc = leaflet.latLng(36.98949379578401, -122.06277128548504);
+let playerLoc = initLoc;
 const playerIcon = leaflet.icon({
-  iconUrl: "project/src/static/tile_0085.png",
+  iconUrl: playerIconURL,
   tooltipAnchor: [-16, 16],
 });
-const playerMarker = leaflet.marker(player_loc, { icon: playerIcon });
+const playerMarker = leaflet.marker(playerLoc, { icon: playerIcon });
 const emptyInven: string = "Inventory empty. Go out there and get some coins!";
 const inventoryChanged: Event = new CustomEvent("inventory-changed");
 
@@ -23,8 +28,8 @@ interface Tile {
   i: number;
   j: number;
 }
-const game_map = leaflet.map(document.getElementById("map")!, {
-  center: player_loc,
+const gameMap = leaflet.map(document.getElementById("map")!, {
+  center: initLoc,
   zoom: GAMEPLAY_ZOOM_LEVEL,
   minZoom: GAMEPLAY_ZOOM_LEVEL,
   maxZoom: GAMEPLAY_ZOOM_LEVEL,
@@ -40,7 +45,8 @@ leaflet
     attribution:
       '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   })
-  .addTo(game_map);
+  .addTo(gameMap);
+const _playerMoved: Event = new CustomEvent("player-moved");
 
 interface Coin {
   i: number;
@@ -59,29 +65,29 @@ interface Cache {
   inventory: Coin[];
   curSerial: number;
 }
-let cacheCache: Map<string, Cache>;
+let cacheCache: Map<string, string>;
 const cacheIcon = leaflet.icon({
-  iconUrl: "project/src/static/tile_0089.png",
+  iconUrl: cacheIconURL,
   tooltipAnchor: [-16, 16],
   popupAnchor: [16, 16],
 });
 
 const resetButton = document.querySelector<HTMLButtonElement>("#reset")!;
 resetButton.addEventListener("click", () => {
-  game_map.closePopup();
+  gameMap.closePopup();
   initialize();
 });
 
 function initialize() {
-  cacheCache = new Map<string, Cache>();
+  cacheCache = new Map<string, string>();
 
   playerMarker.bindTooltip("That's you!");
-  playerMarker.addTo(game_map);
+  playerMarker.addTo(gameMap);
   playerCoins = [];
   inventoryDiv.innerHTML = emptyInven;
 
   // Look around the player's neighborhood for caches to spawn
-  for (const tile of localTiles(player_loc)) {
+  for (const tile of localTiles(initLoc)) {
     if (luck([tile.i, tile.j].toString()) < CACHE_SPAWN_PROBABILITY) {
       spawnCache(tile);
     }
@@ -115,6 +121,13 @@ function localTiles(LatLng: { lat: number; lng: number }): Tile[] {
   return result;
 }
 
+function _panPlayerTo(latLng: { i: number; j: number }) {
+  playerLoc = leaflet.latLng(latLng.i, latLng.j);
+  gameMap.panTo(playerLoc);
+  //Redraw caches
+  //dispatch move
+}
+
 function getCoinLabel(coin: Coin) {
   const result: string = `${coin.i}:${coin.j}#${coin.serial}`;
   return result;
@@ -138,24 +151,30 @@ function mintCoins(cache: Cache, amount: number): void {
 
 function spawnCache(tile: Tile) {
   const key: string = [tile.i, tile.j].toString();
-  let cache: Cache;
-  if (!cacheCache.get(key)) {
+  //let cache: Cache;
+  /*  if (!cacheCache.get(key)) {
     cache = { inventory: [], curSerial: 0, i: tile.i, j: tile.j };
     const cacheCoins = Math.floor(
       luck([cache.i, cache.j, "randombullshitgo"].toString()) * 3,
     );
     mintCoins(cache, cacheCoins);
-    cacheCache.set(key, cache);
+    cacheCache.set(key, "");
   } else {
     cache = cacheCache.get(key)!;
-  }
+  }*/
+  const cache: Cache = { inventory: [], curSerial: 0, i: tile.i, j: tile.j };
+  const cacheCoins = Math.floor(
+    luck([cache.i, cache.j, "randombullshitgo"].toString()) * 3,
+  );
+  mintCoins(cache, cacheCoins);
+  cacheCache.set(key, "");
 
   const location = leaflet.latLng(
     cache.i * TILE_DEGREES,
     cache.j * TILE_DEGREES,
   );
   const cacheMarker = leaflet.marker(location, { icon: cacheIcon });
-  cacheMarker.addTo(game_map);
+  cacheMarker.addTo(gameMap);
 
   cacheMarker.bindPopup(() => {
     const popupDiv = document.createElement("div");
