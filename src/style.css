@@ -68,6 +68,10 @@ button {
   transition: border-color 0.25s;
 }
 
+button.active {
+  background-color: green;
+}
+
 button:hover {
   border-color: #646cff;
 }
