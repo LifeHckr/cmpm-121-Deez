@@ -5,30 +5,19 @@ import "leaflet/dist/leaflet.css";
 import "./style.css";
 import "./leafletWorkaround.ts";
 import luck from "./luck.ts";
-
+//region Consts-Leaflet
 const playerIconURL = import.meta.resolve("../static/tile_0085.png");
 const cacheIconURL = import.meta.resolve("../static/tile_0089.png");
-
+const initLoc = leaflet.latLng(36.98949379578401, -122.06277128548504);
 const GAMEPLAY_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
-const NEIGHBORHOOD_SIZE = 4;
+const NEIGHBORHOOD_SIZE = 3;
 const CACHE_SPAWN_PROBABILITY = .1;
-
-const initLoc = leaflet.latLng(36.98949379578401, -122.06277128548504);
-let playerLoc = initLoc;
-const playerIcon = leaflet.icon({
-  iconUrl: playerIconURL,
-  tooltipAnchor: [-16, 16],
-});
-const playerMarker = leaflet.marker(playerLoc, { icon: playerIcon });
-const emptyInven: string = "Inventory empty. Go out there and get some coins!";
 const inventoryChanged: Event = new CustomEvent("inventory-changed");
-const playerMoved: Event = new CustomEvent("player-moved");
-
-interface Tile {
-  i: number;
-  j: number;
-}
+const playerMovedEvent: string = "player-moved";
+const _removeCacheEvent: string = "remove-cache";
+const _addCacheEvent: string = "add-cache";
+const _updateCacheEvent: string = "update-cache";
 const gameMap = leaflet.map(document.getElementById("map")!, {
   center: initLoc,
   zoom: GAMEPLAY_ZOOM_LEVEL,
@@ -40,36 +29,95 @@ const gameMap = leaflet.map(document.getElementById("map")!, {
   keyboard: false,
   closePopupOnClick: false,
 });
-leaflet
-  .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution:
-      '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  })
-  .addTo(gameMap);
-document.addEventListener("player-moved", () => {
+leaflet.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution:
+    '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(gameMap);
+const messengerMarker = leaflet.marker(leaflet.latLng(0, 0));
+messengerMarker.addEventListener(playerMovedEvent, () => {
   updateCaches();
 });
+const playerIcon = leaflet.icon({
+  iconUrl: playerIconURL,
+  tooltipAnchor: [-16, 16],
+});
+const cacheIcon = leaflet.icon({
+  iconUrl: cacheIconURL,
+  tooltipAnchor: [-16, 16],
+  popupAnchor: [16, 16],
+});
+//endregion
 
+let playerLoc = initLoc;
+const playerMarker = leaflet.marker(playerLoc, { icon: playerIcon });
+const emptyInvenFlavor: string =
+  "Inventory empty. Go out there and get some coins!";
+
+//region Tiles
+interface Tile {
+  i: number;
+  j: number;
+}
+function isLocal(tile: Tile): boolean {
+  return Math.abs(tile.i - Math.round(playerLoc.lat / TILE_DEGREES)) <=
+      NEIGHBORHOOD_SIZE &&
+    Math.abs(tile.j - Math.round(playerLoc.lng / TILE_DEGREES)) <=
+      NEIGHBORHOOD_SIZE;
+}
+function localTiles(LatLng: { lat: number; lng: number }): Tile[] { //AM I A REAL TS DEV YET?!?
+  const local_tile: Tile = {
+    i: Math.round(LatLng.lat / TILE_DEGREES),
+    j: Math.round(LatLng.lng / TILE_DEGREES),
+  };
+  const MAGIC_NUMBER = 2 * NEIGHBORHOOD_SIZE + 1;
+
+  let tileIter: number = 0;
+  return Array(MAGIC_NUMBER * MAGIC_NUMBER)
+    .fill(local_tile, 0, MAGIC_NUMBER * MAGIC_NUMBER)
+    .map((tile: Tile) => ({
+      i: tile.i +
+        (((tileIter % MAGIC_NUMBER) - NEIGHBORHOOD_SIZE) %
+          (NEIGHBORHOOD_SIZE + 1)), //Basically a repeating -nSize -nSize+1,... 0, ... nSize
+      j: tile.j + Math.floor(tileIter++ / MAGIC_NUMBER) - NEIGHBORHOOD_SIZE, // for the length of a neighborhood y val is the same, next length is y +1, etc
+    }));
+}
+//endregion
+
+//region Coin
 interface Coin {
   i: number;
   j: number;
   serial: number;
 }
-let playerCoins: Coin[];
-const inventoryDiv = document.querySelector<HTMLDivElement>("#statusPanel")!; // element `statusPanel` is defined in index.html
+function getCoinLabel(coin: Coin) {
+  return `${coin.i}:${coin.j}#${coin.serial}`;
+}
+function transferCoin(from: Coin[], to: Coin[], coin: Coin) {
+  const index = from.indexOf(coin);
+  if (index <= -1) return; //error
+  from.splice(index, 1);
+  to.push(coin);
+  inventoryDiv.dispatchEvent(inventoryChanged);
+}
+//endregion
+
+let playerInven: Coin[];
+const inventoryDiv = document.querySelector<HTMLDivElement>("#statusPanel")!;
 inventoryDiv.addEventListener("inventory-changed", () => {
-  updateInventoryDiv();
+  if (playerInven.length < 1) {
+    inventoryDiv.innerHTML = emptyInvenFlavor;
+    return;
+  }
+  inventoryDiv.innerHTML = "Inventory: ";
+  for (const coin of playerInven) {
+    const buttonDiv = document.createElement("div");
+    buttonDiv.innerHTML = `Coin: ${getCoinLabel(coin)}`;
+    inventoryDiv.append(buttonDiv);
+  }
 });
 
-const cacheToMomento = function (this: Cache): string {
-  return JSON.stringify(this);
-};
-
-function cacheFromMemento(str: string): Cache {
-  return JSON.parse(str);
-}
-
+//region Cache
 interface Cache {
   i: number;
   j: number;
@@ -77,18 +125,67 @@ interface Cache {
   curSerial: number;
 
   toMemento(): string;
+  fromMemento(str: string): Cache;
+}
+Cache.prototype.toMemento = function (this: Cache): string {
+  return JSON.stringify(this);
+};
+Cache.prototype.fromMemento = function (str: string): Cache {
+  const tempCache = JSON.parse(str);
+  const resCache = Cache();
+  resCache.i = tempCache.i;
+  resCache.j = tempCache.j;
+  resCache.inventory = tempCache.inventory;
+  return resCache;
+};
+
+function Cache(): Cache;
+function Cache(cacheLike: Tile): Cache;
+function Cache(
+  cacheLike:
+    | { i: number; j: number; curSerial: number; inventory: Coin[] }
+    | Tile
+    | void,
+): Cache {
+  if (!cacheLike) {
+    return {
+      inventory: [],
+      curSerial: 0,
+      i: 0,
+      j: 0,
+      toMemento: Cache.prototype.toMemento,
+      fromMemento: Cache.prototype.fromMemento,
+    };
+  } else if ("inventory" in cacheLike) {
+    return {
+      inventory: cacheLike.inventory,
+      curSerial: cacheLike.curSerial,
+      i: cacheLike.i,
+      j: cacheLike.j,
+      toMemento: Cache.prototype.toMemento,
+      fromMemento: Cache.prototype.fromMemento,
+    };
+  } else {
+    return {
+      inventory: [],
+      curSerial: 0,
+      i: cacheLike.i,
+      j: cacheLike.j,
+      toMemento: Cache.prototype.toMemento,
+      fromMemento: Cache.prototype.fromMemento,
+    };
+  }
 }
 
+function mintCoins(cache: Cache, amount: number): void {
+  for (let k = 0; k < amount; k++) {
+    cache.inventory.push({ i: cache.i, j: cache.j, serial: cache.curSerial++ });
+  }
+}
+//endregion
+
 let cacheCache: Map<string, string>;
-const currentCaches: Map<Tile, [Marker, Cache]> = new Map<
-  Tile,
-  [Marker, Cache]
->();
-const cacheIcon = leaflet.icon({
-  iconUrl: cacheIconURL,
-  tooltipAnchor: [-16, 16],
-  popupAnchor: [16, 16],
-});
+const currentCaches: Map<string, Marker> = new Map<string, Marker>();
 
 document.querySelector<HTMLButtonElement>("#reset")!
   .addEventListener("click", () => {
@@ -115,174 +212,110 @@ document.querySelector<HTMLButtonElement>("#east")!
   .addEventListener("click", () => {
     panPlayerTo({ i: playerLoc.lat, j: playerLoc.lng + TILE_DEGREES });
   });
+document.querySelector<HTMLButtonElement>("#sensor")!.addEventListener(
+  "click",
+  () => {
+    panPlayerTo({ i: playerLoc.lat, j: playerLoc.lng });
+  },
+);
 
 function initialize() {
-  currentCaches.forEach((marker, tile) => {
-    marker[0].removeFrom(gameMap);
-    currentCaches.delete(tile);
-  });
   cacheCache = new Map<string, string>();
+  currentCaches.clear();
 
-  playerMarker.bindTooltip("That's you!");
-  playerMarker.addTo(gameMap);
-  playerCoins = [];
-  inventoryDiv.innerHTML = emptyInven;
+  playerMarker.bindTooltip("That's you!").addTo(gameMap);
+  playerInven = [];
+  inventoryDiv.innerHTML = emptyInvenFlavor;
 
   updateCaches();
 }
 
 initialize();
 
-function newCache(tile: Tile): Cache {
-  return {
-    inventory: [],
-    curSerial: 0,
-    i: tile.i,
-    j: tile.j,
-    toMemento: cacheToMomento,
-  };
-}
-
-function getLocalTile(LatLng: { lat: number; lng: number }): Tile {
-  const i: number = Math.round(LatLng.lat / TILE_DEGREES);
-  const j: number = Math.round(LatLng.lng / TILE_DEGREES);
-  return { i, j };
-}
-
-function localTiles(LatLng: { lat: number; lng: number }): Tile[] {
-  const result: Tile[] = [];
-  const local_tile = getLocalTile(LatLng);
-  for (
-    let i = local_tile.i - NEIGHBORHOOD_SIZE + 1;
-    i < local_tile.i + NEIGHBORHOOD_SIZE;
-    i++
-  ) {
-    for (
-      let j = local_tile.j - NEIGHBORHOOD_SIZE + 1;
-      j < local_tile.j + NEIGHBORHOOD_SIZE;
-      j++
-    ) {
-      result.push({ i: i, j: j });
-    }
-  }
-  return result;
-}
-
 function panPlayerTo(latLng: { i: number; j: number }) {
   playerLoc = leaflet.latLng(latLng.i, latLng.j);
   gameMap.panTo(playerLoc);
   playerMarker.setLatLng(playerLoc);
-  document.dispatchEvent(playerMoved);
-}
-
-function getCoinLabel(coin: Coin) {
-  const result: string = `${coin.i}:${coin.j}#${coin.serial}`;
-  return result;
-}
-
-function transferCoin(from: Coin[], to: Coin[], coin: Coin) {
-  const index = from.indexOf(coin);
-  if (index > -1) {
-    from.splice(index, 1);
-  }
-  to.push(coin);
-  inventoryDiv.dispatchEvent(inventoryChanged);
-}
-
-function mintCoins(cache: Cache, amount: number): void {
-  for (let k = 0; k < amount; k++) {
-    cache.inventory.push({ i: cache.i, j: cache.j, serial: cache.curSerial });
-    cache.curSerial++;
-  }
+  messengerMarker.fireEvent(playerMovedEvent, null, true);
 }
 
 function updateCaches() {
   // Look around the player's neighborhood for caches to spawn
-  const newCaches: Tile[] = []; //Caches that need to be rendered
-  for (const tile of localTiles(playerLoc)) {
-    if (luck([tile.i, tile.j].toString()) < CACHE_SPAWN_PROBABILITY) {
-      newCaches.push(tile);
+  localTiles(playerLoc).forEach((tile) => {
+    if (
+      luck([tile.i, tile.j].toString()) < CACHE_SPAWN_PROBABILITY &&
+      !currentCaches.has([tile.i, tile.j].toString())
+    ) {
+      spawnCache(tile);
     }
-  }
-  currentCaches.forEach((marker, tile) => { //remove caches outside bounds
-    if (newCaches.indexOf(tile) === -1) {
-      marker[0].removeFrom(gameMap);
-      cacheCache.set([tile.i, tile.j].toString(), marker[1].toMemento());
-      currentCaches.delete(tile);
-    }
-  });
-
-  newCaches.filter(function (tile: Tile): boolean {
-    return !currentCaches.has(tile); //For tiles in newCaches, but not in currenCaches, spawn
-  }).map(function (tile: Tile) {
-    spawnCache(tile);
   });
 }
 
-function spawnCache(tile: Tile) {
+function populateCache(tile: Tile): Cache {
   const key: string = [tile.i, tile.j].toString();
-  let cache: Cache;
-  if (!cacheCache.get(key)) {
-    cache = newCache(tile);
+  if (!cacheCache.get(key)) { //Wholly new cache
+    const cache = Cache(tile);
     const cacheCoins = Math.floor(
       luck([cache.i, cache.j, "randombullshitgo"].toString()) * 2 + 1,
     );
     mintCoins(cache, cacheCoins);
     cacheCache.set(key, cache.toMemento());
-  } else {
-    cache = cacheFromMemento(cacheCache.get(key)!);
-    cache.toMemento = cacheToMomento;
+    return cache;
   }
+  return Cache().fromMemento(cacheCache.get(key)!);
+}
+
+function spawnCache(tile: Tile) {
+  const cache = populateCache(tile);
   const location = leaflet.latLng(
     cache.i * TILE_DEGREES,
     cache.j * TILE_DEGREES,
   );
-  const cacheMarker = leaflet.marker(location, { icon: cacheIcon });
-  cacheMarker.addTo(gameMap);
 
-  cacheMarker.bindPopup(() => {
-    const popupDiv = document.createElement("div");
-    return updateCachePopup(popupDiv, cache);
-  });
+  const onMove = () => { //might be a better way to do this
+    if (isLocal(tile)) {
+      return;
+    }
+    cacheMarker.removeFrom(gameMap);
+    cacheCache.set([tile.i, tile.j].toString(), cache.toMemento());
+    currentCaches.delete([tile.i, tile.j].toString());
+    messengerMarker.off(playerMovedEvent, onMove);
+  };
 
-  currentCaches.set(tile, [cacheMarker, cache]);
-}
+  const cacheMarker = leaflet.marker(location, { icon: cacheIcon }).addTo(
+    gameMap,
+  )
+    .bindPopup(() => {
+      const popupDiv = document.createElement("div");
+      return updateCachePopup(popupDiv, cache);
+    })
+    .on(playerMovedEvent, onMove);
 
-function updateInventoryDiv() {
-  if (playerCoins.length < 1) {
-    inventoryDiv.innerHTML = emptyInven;
-    return;
-  }
-  inventoryDiv.innerHTML = "Inventory: ";
-  for (const coin of playerCoins) {
-    const buttonDiv = document.createElement("div");
-    buttonDiv.innerHTML = `Coin: ${getCoinLabel(coin)}`;
-    inventoryDiv.append(buttonDiv);
-  }
+  messengerMarker.addEventParent(cacheMarker);
+  currentCaches.set([tile.i, tile.j].toString(), cacheMarker);
 }
 
 function updateCachePopup(popupDiv: HTMLDivElement, cache: Cache) {
   popupDiv.innerHTML = `<div>Cache: ${cache.i},${cache.j} <br>Inventory:</div>`;
+  appendCollect(cache, popupDiv);
 
-  coinSelectionMenu(cache, popupDiv);
-
-  if (playerCoins.length > 0) {
+  if (playerInven.length > 0) {
     const depositButton = document.createElement("button");
     depositButton.innerHTML = "Deposit";
     depositButton.id = "give";
     depositButton.addEventListener("click", () => {
-      if (playerCoins.length <= 0) {
+      if (playerInven.length <= 0) {
         return;
       }
       depositButton.remove();
-      depositMenu(cache, popupDiv);
+      appendDeposit(cache, popupDiv);
     });
     popupDiv.appendChild(depositButton);
   }
   return popupDiv;
 }
 
-function coinSelectionMenu(
+function appendCollect(
   cache: Cache,
   source: HTMLDivElement,
 ): HTMLDivElement {
@@ -291,40 +324,44 @@ function coinSelectionMenu(
     ? invenLabel.innerHTML = "Choose a coin: "
     : invenLabel.innerHTML = "Cache is empty.";
 
-  for (const coin of cache.inventory) {
+  cache.inventory.forEach((coin) => {
     const buttonDiv = document.createElement("div");
     buttonDiv.innerHTML = `Coin: ${getCoinLabel(coin)}  `;
     invenLabel.append(buttonDiv);
 
-    const coinButton = document.createElement("button");
-    coinButton.innerHTML = "Select";
-    coinButton.addEventListener("click", () => {
-      transferCoin(cache.inventory, playerCoins, coin);
+    const onSelect = function () {
+      transferCoin(cache.inventory, playerInven, coin);
       updateCachePopup(source, cache);
-    });
-    buttonDiv.append(coinButton);
-  }
+    };
+    buttonDiv.append(coinSelectButton(onSelect));
+  });
   source.append(invenLabel);
   return invenLabel;
 }
 
-function depositMenu(cache: Cache, source: HTMLDivElement): HTMLDivElement {
+function appendDeposit(cache: Cache, source: HTMLDivElement): HTMLDivElement {
   const depositDiv = document.createElement("div");
   depositDiv.innerHTML = "Deposit: ";
 
-  for (const coin of playerCoins) {
+  playerInven.forEach((coin) => {
     const buttonDiv = document.createElement("div");
     buttonDiv.innerHTML = `Coin: ${getCoinLabel(coin)}  `;
     depositDiv.append(buttonDiv);
 
-    const coinButton = document.createElement("button");
-    coinButton.innerHTML = "Select";
-    coinButton.addEventListener("click", () => {
-      transferCoin(playerCoins, cache.inventory, coin);
+    const onSelect = function () {
+      transferCoin(playerInven, cache.inventory, coin);
       updateCachePopup(source, cache);
-    });
-    buttonDiv.append(coinButton);
-  }
+    };
+    buttonDiv.append(coinSelectButton(onSelect));
+  });
+
   source.append(depositDiv);
   return depositDiv;
+}
+
+function coinSelectButton(onSelect: () => void) {
+  const coinButton = document.createElement("button");
+  coinButton.innerHTML = "Select";
+  coinButton.addEventListener("click", onSelect);
+  return coinButton;
 }
