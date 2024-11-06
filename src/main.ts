@@ -17,7 +17,7 @@ const NEIGHBORHOOD_SIZE = 3;
 const CACHE_SPAWN_PROBABILITY = .1;
 const inventoryChanged: Event = new CustomEvent("inventory-changed");
 const playerMovedEvent: string = "player-moved";
-const gameMap = leaflet.map(document.getElementById("map")!, {
+const gameMap = leaflet.map(document.getElementById("map")!, { //push
   center: initLoc,
   zoom: GAMEPLAY_ZOOM_LEVEL,
   minZoom: GAMEPLAY_ZOOM_LEVEL,
