@@ -16,7 +16,6 @@ const GAMEPLAY_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 3;
 const CACHE_SPAWN_PROBABILITY = .1;
-const inventoryChanged: Event = new CustomEvent("inventory-changed");
 const playerMovedEvent: string = "player-moved";
 
 const playerIcon = leaflet.icon({
@@ -48,7 +47,7 @@ class MapManager {
   saveCache(lastUpdated: Cache) {
     this.cacheCache.set(
       [lastUpdated.i, lastUpdated.j].toString(),
-      lastUpdated.toMemento(),
+      CachePersistence.cacheToMemento(lastUpdated),
     );
     const storables: [string, string][] = [];
     Array.from(this.cacheCache.entries()).forEach((iter: [string, string]) => {
@@ -66,8 +65,10 @@ class MapManager {
     const tempInventory: coinLike[] = JSON.parse(
       localStorage.getItem("playerInven")!,
     );
-    for (const coin of tempInventory) {
-      playerInven.push(new Coin(coin.i, coin.j, coin.serial));
+    if (tempInventory) {
+      for (const coin of tempInventory) {
+        playerInven.push(new Coin(coin.i, coin.j, coin.serial));
+      }
     }
     if (!playerInven) playerInven = [];
     const tempLatlngs = JSON.parse(localStorage.getItem("playerTrail")!);
@@ -98,7 +99,7 @@ class MapManager {
         const popupDiv = document.createElement("div");
         return updateCachePopup(popupDiv, cache);
       })
-      .on(playerMovedEvent, () => { //might be a better way to do this
+      .on(playerMovedEvent, () => {
         if (isLocal(tile)) {
           return;
         }
@@ -185,6 +186,34 @@ class MapManager {
   }
 }
 
+class UIManager {
+  static inventoryDiv: HTMLDivElement = document.querySelector<HTMLDivElement>(
+    "#statusPanel",
+  )!;
+
+  static updateInventory(inventory: Coin[]): void {
+    if (playerInven.length < 1) {
+      this.inventoryDiv.innerHTML = emptyInvenFlavor;
+      return;
+    }
+    this.inventoryDiv.innerHTML = "Inventory: ";
+    for (const coin of inventory) {
+      const buttonAnchor = document.createElement("a");
+      buttonAnchor.innerHTML = `Coin: ${coin.getCoinLabel()} <br>`;
+      buttonAnchor.onclick = () => {
+        CurMap.panTo(
+          leaflet.latLng(
+            coin.getTile().i * TILE_DEGREES,
+            coin.getTile().j * TILE_DEGREES,
+          ),
+        );
+      };
+      this.inventoryDiv.append(buttonAnchor);
+    }
+    saveInven();
+  }
+}
+
 const CurMap = new MapManager("map", initLoc);
 
 //endregion
@@ -212,7 +241,6 @@ function localTiles(LatLng: { lat: number; lng: number }): Tile[] { //AM I A REA
     j: Math.round(LatLng.lng / TILE_DEGREES),
   };
   const MAGIC_NUMBER = 2 * NEIGHBORHOOD_SIZE + 1;
-
   let tileIter: number = 0;
   return Array(MAGIC_NUMBER * MAGIC_NUMBER)
     .fill(local_tile, 0, MAGIC_NUMBER * MAGIC_NUMBER)
@@ -256,7 +284,7 @@ function transferCoin(from: Coin[], to: Coin[], coin: Coin) {
   if (index <= -1) return; //error
   from.splice(index, 1);
   to.push(coin);
-  inventoryDiv.dispatchEvent(inventoryChanged);
+  UIManager.updateInventory(playerInven);
 }
 //endregion
 
@@ -266,96 +294,52 @@ function saveInven() {
 }
 
 const playerTrail: Polyline = CurMap.addPToMap(leaflet.polyline([]));
-const inventoryDiv = document.querySelector<HTMLDivElement>("#statusPanel")!;
-inventoryDiv.addEventListener("inventory-changed", () => {
-  if (playerInven.length < 1) {
-    inventoryDiv.innerHTML = emptyInvenFlavor;
-    return;
-  }
-  inventoryDiv.innerHTML = "Inventory: ";
-  for (const coin of playerInven) {
-    const buttonAnchor = document.createElement("a");
-    buttonAnchor.innerHTML = `Coin: ${coin.getCoinLabel()} <br>`;
-    buttonAnchor.onclick = () => {
-      CurMap.panTo(
-        leaflet.latLng(
-          coin.getTile().i * TILE_DEGREES,
-          coin.getTile().j * TILE_DEGREES,
-        ),
-      );
-    };
-    inventoryDiv.append(buttonAnchor);
-  }
-  saveInven();
-});
 
 //region Cache
-interface Cache {
+class Cache {
   i: number;
   j: number;
   inventory: Coin[];
   curSerial: number;
 
-  toMemento(): string;
-  fromMemento(str: string): Cache;
-}
-const cacheToMemento = function (this: Cache): string {
-  return JSON.stringify(this);
-};
-Cache.prototype.toMemento = cacheToMemento;
-const cacheFromMemento = function (str: string): Cache {
-  const tempCache = JSON.parse(str);
-  const resCache = Cache();
-  resCache.i = tempCache.i;
-  resCache.j = tempCache.j;
-  for (const coinLike of tempCache.inventory) {
-    resCache.inventory.push(new Coin(coinLike.i, coinLike.j, coinLike.serial));
+  constructor(
+    tile: Tile = { i: 0, j: 0 },
+    curSerial: number = 0,
+    inventory: Coin[] = [],
+  ) {
+    this.i = tile.i;
+    this.j = tile.j;
+    this.inventory = inventory;
+    this.curSerial = curSerial;
   }
-  return resCache;
-};
-Cache.prototype.fromMemento = cacheFromMemento;
 
-function Cache(): Cache;
-function Cache(cacheLike: Tile): Cache;
-function Cache(
-  cacheLike:
-    | { i: number; j: number; curSerial: number; inventory: Coin[] }
-    | Tile
-    | void,
-): Cache {
-  if (!cacheLike) {
-    return {
-      inventory: [],
-      curSerial: 0,
-      i: 0,
-      j: 0,
-      toMemento: cacheToMemento,
-      fromMemento: cacheFromMemento,
-    };
-  } else if ("inventory" in cacheLike) {
-    return {
-      inventory: cacheLike.inventory,
-      curSerial: cacheLike.curSerial,
-      i: cacheLike.i,
-      j: cacheLike.j,
-      toMemento: cacheToMemento,
-      fromMemento: cacheFromMemento,
-    };
-  } else {
-    return {
-      inventory: [],
-      curSerial: 0,
-      i: cacheLike.i,
-      j: cacheLike.j,
-      toMemento: cacheToMemento,
-      fromMemento: cacheFromMemento,
-    };
+  mintCoins(amount: number): void {
+    for (let k = 0; k < amount; k++) {
+      this.inventory.push(new Coin(this.i, this.j, this.curSerial++));
+    }
+  }
+
+  getInventor(): Coin[] {
+    return this.inventory;
   }
 }
 
-function mintCoins(cache: Cache, amount: number): void {
-  for (let k = 0; k < amount; k++) {
-    cache.inventory.push(new Coin(cache.i, cache.j, cache.curSerial++));
+class CachePersistence {
+  static cacheToMemento(cache: Cache): string {
+    return JSON.stringify(cache);
+  }
+
+  static cacheFromMemento(str: string): Cache {
+    const tempCache = JSON.parse(str);
+    const resCache = new Cache();
+    resCache.i = tempCache.i;
+    resCache.j = tempCache.j;
+    for (const coinLike of tempCache.inventory) {
+      resCache.inventory.push(
+        new Coin(coinLike.i, coinLike.j, coinLike.serial),
+      );
+    }
+    return resCache;
   }
 }
 //endregion
@@ -423,7 +407,7 @@ function initialize() {
   playerInven = [];
   CurMap.loadFromLocal();
   playerTrail.addLatLng(playerLoc);
-  inventoryDiv.dispatchEvent(inventoryChanged);
+  UIManager.updateInventory(playerInven);
   updateCaches();
 }
 
@@ -444,15 +428,15 @@ function updateCaches() {
 function populateCache(tile: Tile): Cache {
   const key: string = [tile.i, tile.j].toString();
   if (!CurMap.CCGet(key)) { //Wholly new cache
-    const cache = Cache(tile);
+    const cache = new Cache(tile);
     const cacheCoins = Math.floor(
       luck([cache.i, cache.j, "randombullshitgo"].toString()) * 2 + 1,
     );
-    mintCoins(cache, cacheCoins);
+    cache.mintCoins(cacheCoins);
     CurMap.saveCache(cache);
     return cache;
   }
-  return cacheFromMemento(CurMap.CCGet(key)!);
+  return CachePersistence.cacheFromMemento(CurMap.CCGet(key)!);
 }
 
 function updateCachePopup(popupDiv: HTMLDivElement, cache: Cache) {
